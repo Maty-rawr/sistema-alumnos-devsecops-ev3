@@ -15,9 +15,8 @@ pipeline {
 
     environment {
         PIP_DISABLE_PIP_VERSION_CHECK = '1'
-        // En la red interna de Docker, el servicio de staging se alcanza por el nombre del contenedor/servicio.
-        // Si en tu compose.yaml el servicio de staging tiene otro nombre, ajústalo aquí (ej. http://taller:5001).
-        ZAP_TARGET_URL = 'http://taller:5001'
+        // En la red interna de Docker, deploy.sh levanta staging (5001) y producción (5000) en el servicio jenkins.
+        ZAP_TARGET_URL = 'http://jenkins:5001'
     }
 
     stages {
@@ -51,7 +50,16 @@ pipeline {
             steps {
                 sh '''
                     cd "${WORKSPACE}"
-                    .venv/bin/bandit -r . -x ./.venv,./tests -ll -f txt -o reports/bandit.txt || true
+                    mkdir -p reports
+                    if [ -x ".venv/bin/bandit" ]; then
+                        .venv/bin/bandit -r . -x ./.venv,./tests -ll -f txt -o reports/bandit.txt || true
+                    elif command -v bandit >/dev/null 2>&1; then
+                        bandit -r . -x ./.venv,./tests -ll -f txt -o reports/bandit.txt || true
+                    elif python3 -m bandit --version >/dev/null 2>&1; then
+                        python3 -m bandit -r . -x ./.venv,./tests -ll -f txt -o reports/bandit.txt || true
+                    else
+                        .venv/bin/pip install --quiet bandit && .venv/bin/bandit -r . -x ./.venv,./tests -ll -f txt -o reports/bandit.txt || true
+                    fi
                     cat reports/bandit.txt || true
                 '''
             }
@@ -61,8 +69,20 @@ pipeline {
             steps {
                 sh '''
                     cd "${WORKSPACE}"
-                    .venv/bin/pip-audit -r requirements.txt -f json -o reports/pip-audit.json || true
-                    .venv/bin/pip-audit -r requirements.txt || true
+                    mkdir -p reports
+                    if [ -x ".venv/bin/pip-audit" ]; then
+                        .venv/bin/pip-audit -r requirements.txt -f json -o reports/pip-audit.json || true
+                        .venv/bin/pip-audit -r requirements.txt || true
+                    elif command -v pip-audit >/dev/null 2>&1; then
+                        pip-audit -r requirements.txt -f json -o reports/pip-audit.json || true
+                        pip-audit -r requirements.txt || true
+                    elif python3 -m pip_audit --version >/dev/null 2>&1; then
+                        python3 -m pip_audit -r requirements.txt -f json -o reports/pip-audit.json || true
+                        python3 -m pip_audit -r requirements.txt || true
+                    else
+                        .venv/bin/pip install --quiet pip-audit && .venv/bin/pip-audit -r requirements.txt -f json -o reports/pip-audit.json || true
+                        .venv/bin/pip-audit -r requirements.txt || true
+                    fi
                 '''
             }
         }
@@ -81,7 +101,7 @@ pipeline {
                 sh '''
                     cd "${WORKSPACE}"
                     mkdir -p reports
-                    OBJETIVO="${ZAP_TARGET_URL:-http://127.0.0.1:5001}"
+                    OBJETIVO="${ZAP_TARGET_URL:-http://jenkins:5001}"
                     echo "Ejecutando escaneo OWASP ZAP contra: ${OBJETIVO}"
                     set +e
                     .venv/bin/python scripts/zap_scan.py "${OBJETIVO}"
